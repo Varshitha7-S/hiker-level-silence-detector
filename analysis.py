@@ -337,14 +337,22 @@ def generate_attribution_and_explanation(
 
     # Check Rule 3: Group risk — follow-up required
     # Several hikers miss repeated check-ins AND movement stops or changes unexpectedly
+    # in an adequate link quality segment (cannot be explained by RF blackout alone)
     rule3_cond_silence = grp_result.is_simultaneous_silence
     rule3_cond_repeated = any(
         ind_results[h].consecutive_misses >= config.consecutive_miss_threshold
         for h in grp_result.silent_hiker_ids
     ) if grp_result.silent_hiker_ids else False
     rule3_cond_movement_halt = grp_result.is_group_halted or (len(silent_and_halted) >= config.group_silence_min_hikers)
-    # Group risk is reinforced when link quality is NOT degraded (cannot be explained by RF blackout alone)
+    # Group risk requires adequate link quality (cannot be explained by RF blackout alone)
     rule3_cond_not_just_rf = not grp_result.is_group_link_degraded
+
+    rule3_matched = (
+        rule3_cond_silence
+        and rule3_cond_repeated
+        and rule3_cond_movement_halt
+        and rule3_cond_not_just_rf
+    )
 
     criteria_trace.append({
         "rule": "Group Risk Rule",
@@ -354,7 +362,7 @@ def generate_attribution_and_explanation(
             f"Group movement halt (speed <= {config.movement_halt_threshold} km/h)": rule3_cond_movement_halt,
             f"Adequate link quality (> {config.low_link_threshold})": rule3_cond_not_just_rf,
         },
-        "matched": rule3_cond_silence and rule3_cond_repeated and rule3_cond_movement_halt
+        "matched": rule3_matched
     })
 
     # Check Rule 1: Likely shared connectivity issue
@@ -363,6 +371,8 @@ def generate_attribution_and_explanation(
     rule1_cond_low_link = grp_result.is_group_link_degraded
     rule1_cond_moving = not grp_result.is_group_halted and (len(silent_and_moving) >= config.group_silence_min_hikers)
 
+    rule1_matched = rule1_cond_silence and rule1_cond_low_link and rule1_cond_moving
+
     criteria_trace.append({
         "rule": "Shared Connectivity Gap Rule",
         "conditions": {
@@ -370,7 +380,7 @@ def generate_attribution_and_explanation(
             f"Low link quality (mean <= {config.low_link_threshold})": rule1_cond_low_link,
             f"Movement continues (> {config.movement_halt_threshold} km/h)": rule1_cond_moving,
         },
-        "matched": rule1_cond_silence and rule1_cond_low_link and rule1_cond_moving
+        "matched": rule1_matched
     })
 
     # Check Rule 2: Individual anomaly — check required
@@ -383,6 +393,8 @@ def generate_attribution_and_explanation(
     )
     rule2_cond_peers_reporting = len(grp_result.reporting_hiker_ids) >= 1
 
+    rule2_matched = rule2_cond_isolated and rule2_cond_movement_change and rule2_cond_peers_reporting
+
     criteria_trace.append({
         "rule": "Individual Anomaly Rule",
         "conditions": {
@@ -390,7 +402,7 @@ def generate_attribution_and_explanation(
             f"Target hiker movement stopped/slowed (speed <= {config.movement_halt_threshold} km/h)": rule2_cond_movement_change,
             "Peers continuing normal check-ins": rule2_cond_peers_reporting,
         },
-        "matched": rule2_cond_isolated and rule2_cond_movement_change and rule2_cond_peers_reporting
+        "matched": rule2_matched
     })
 
     # Rule precedence:
@@ -399,7 +411,7 @@ def generate_attribution_and_explanation(
     # 3. Individual Anomaly (isolated individual event)
     # 4. Insufficient Evidence (default fallback)
 
-    if rule3_cond_silence and rule3_cond_repeated and rule3_cond_movement_halt:
+    if rule3_matched:
         classification = "Group risk — follow-up required"
         badge_color = "#dc3545"  # Danger Red
         confidence_descriptor = "High (Correlated multi-node silence + collective halt)"
@@ -416,7 +428,7 @@ def generate_attribution_and_explanation(
             "Terrain context: Located in high-gradient/complex terrain segment where collective hazards (rockfall, route blockage) warrant immediate attention.",
         ]
 
-    elif rule1_cond_silence and rule1_cond_low_link and rule1_cond_moving:
+    elif rule1_matched:
         classification = "Likely shared connectivity issue"
         badge_color = "#ffc107"  # Warning Amber
         confidence_descriptor = "High (Correlated multi-node silence + low RF + continuous movement)"
@@ -433,7 +445,7 @@ def generate_attribution_and_explanation(
             "Shared fate inference: The simultaneous silence aligns with route geography rather than individual distress.",
         ]
 
-    elif rule2_cond_isolated and rule2_cond_movement_change and rule2_cond_peers_reporting:
+    elif rule2_matched:
         iso_id = grp_result.isolated_hiker_id
         iso_info = ind_results[iso_id]
         classification = "Individual anomaly — check required"
