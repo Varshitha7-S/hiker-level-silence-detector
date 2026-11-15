@@ -86,12 +86,28 @@ class TestAnalysisPipeline(unittest.TestCase):
         self.assertTrue(res.individual_summary["H4"].is_movement_stopped)
 
     def test_scenario_3_attribution(self):
-        """Scenario 3: Multiple silent hikers + group movement halted -> Group risk — follow-up required"""
+        """Scenario 3: Multiple silent hikers + group movement halted + adequate link quality -> Group risk — follow-up required"""
         df = data_generator.generate_scenario_3_data()
         res = run_pipeline(df, self.config)
         self.assertEqual(res.classification, "Group risk — follow-up required")
         self.assertTrue(res.group_summary.is_simultaneous_silence)
         self.assertTrue(res.group_summary.is_group_halted)
+        self.assertFalse(res.group_summary.is_group_link_degraded)
+        # Verify Group Risk Rule in trace matched and all 4 conditions were True
+        grp_rule_trace = next(r for r in res.rule_criteria_met if r["rule"] == "Group Risk Rule")
+        self.assertTrue(grp_rule_trace["matched"])
+        self.assertTrue(all(grp_rule_trace["conditions"].values()))
+
+    def test_group_risk_requires_adequate_link_quality(self):
+        """If group is silent and halted but link quality is severely degraded (RF blackout), Group Risk Rule must NOT match."""
+        df = data_generator.generate_scenario_3_data()
+        # Simulate degraded RF link across all hikers in latest intervals
+        df_degraded = df.copy()
+        df_degraded["link_quality"] = 0.15
+        res = run_pipeline(df_degraded, self.config)
+        grp_rule_trace = next(r for r in res.rule_criteria_met if r["rule"] == "Group Risk Rule")
+        self.assertFalse(grp_rule_trace["matched"])
+        self.assertNotEqual(res.classification, "Group risk — follow-up required")
 
     def test_insufficient_evidence_at_early_timestamp(self):
         """At 09:05 when everyone is reporting normally, outcome should be Insufficient evidence"""
